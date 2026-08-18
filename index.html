@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Starfield Simulation</title>
+    <!-- Tailwind CSS for modern UI controls -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #05050a;
+            color: #f3f4f6;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        .ui-overlay {
+            position: relative;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .interactive-element {
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col justify-between select-none">
+
+    <canvas id="starfieldCanvas"></canvas>
+
+    <script>
+        window.onload = function () {
+            const canvas = document.getElementById('starfieldCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // Simulation State
+            let width, height;
+            let stars = [];
+            let starCount = 800;
+            let baseSpeed = 1.2;
+            let hyperdrive = false;
+
+            // Mouse & Touch interaction tracking
+            let mouseX = 0;
+            let mouseY = 0;
+            let targetMouseX = 0;
+            let targetMouseY = 0;
+            let isMouseDown = false;
+            let lastMouseX = 0;
+            let lastMouseY = 0;
+            let cameraOffsetX = 0;
+            let cameraOffsetY = 0;
+
+            // Vector Cube parameters
+            let cubeRotationX = 0;
+            let cubeRotationY = 0;
+            let cubeRotationZ = 0;
+            let cubeTime = 0;
+
+            // Define 8 vertices of a cube centered at origin
+            const cubeVertices = [
+                [-1, -1, -1],
+                [ 1, -1, -1],
+                [ 1,  1, -1],
+                [-1,  1, -1],
+                [-1, -1,  1],
+                [ 1, -1,  1],
+                [ 1,  1,  1],
+                [-1,  1,  1]
+            ];
+
+            // Define 12 edges connecting the vertices
+            const cubeEdges = [
+                [0, 1], [1, 2], [2, 3], [3, 0], // Back face
+                [4, 5], [5, 6], [6, 7], [7, 4], // Front face
+                [0, 4], [1, 5], [2, 6], [3, 7]  // Connecting edges
+            ];
+
+            // Star Class definition
+            class Star {
+                constructor() {
+                    this.reset(true);
+                }
+
+                reset(initial = false) {
+                    this.x = (Math.random() - 0.5) * width * 2;
+                    this.y = (Math.random() - 0.5) * height * 2;
+                    this.z = initial ? Math.random() * width : width;
+                    this.originalZ = this.z;
+                    
+                    const colors = ['#ffffff', '#e0e7ff', '#c7d2fe', '#fef3c7', '#fed7aa'];
+                    this.color = colors[Math.floor(Math.random() * colors.length)];
+                    this.size = Math.random() * 1.5 + 0.5;
+                }
+
+                update(speedMultiplier) {
+                    const currentSpeed = (hyperdrive ? baseSpeed * 5 : baseSpeed) * speedMultiplier;
+                    this.z -= currentSpeed * 12;
+
+                    if (this.z <= 0) {
+                        this.reset();
+                        this.z = width;
+                    }
+                }
+
+                draw() {
+                    const k = 250 / this.z;
+                    const px = (this.x + cameraOffsetX) * k + width / 2;
+                    const py = (this.y + cameraOffsetY) * k + height / 2;
+
+                    if (px >= 0 && px <= width && py >= 0 && py <= height) {
+                        const pSize = Math.max(0, (1 - this.z / width) * this.size * (hyperdrive ? k * 3 : k * 2));
+                        
+                        ctx.save();
+                        ctx.fillStyle = this.color;
+                        ctx.beginPath();
+                        ctx.arc(px, py, pSize, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        if (hyperdrive || baseSpeed > 2.0) {
+                            const prevK = 250 / (this.z + (hyperdrive ? 60 : 30));
+                            const prevPx = (this.x + cameraOffsetX) * prevK + width / 2;
+                            const prevPy = (this.y + cameraOffsetY) * prevK + height / 2;
+
+                            ctx.strokeStyle = this.color;
+                            ctx.lineWidth = pSize;
+                            ctx.beginPath();
+                            ctx.moveTo(px, py);
+                            ctx.lineTo(prevPx, prevPy);
+                            ctx.stroke();
+                        }
+                        ctx.restore();
+                    }
+                }
+            }
+
+            function drawCube() {
+                cubeTime += 0.03;
+                cubeRotationX += 0.012;
+                cubeRotationY += 0.018;
+                cubeRotationZ += 0.008;
+
+                // Squashing factors using sine oscillations on individual axes
+                const squashX = 1 + Math.sin(cubeTime * 1.2) * 0.4;
+                const squashY = 1 + Math.cos(cubeTime * 1.5) * 0.4;
+                const squashZ = 1 + Math.sin(cubeTime * 0.9) * 0.4;
+
+                const baseSize = Math.min(width, height) * 0.18;
+                const transformedVertices = [];
+
+                // Rotate and squash vertices
+                for (let i = 0; i < cubeVertices.length; i++) {
+                    let [x, y, z] = cubeVertices[i];
+
+                    // Apply squashing
+                    x *= squashX;
+                    y *= squashY;
+                    z *= squashZ;
+
+                    // Rotate around X axis
+                    let rad = cubeRotationX;
+                    let cos = Math.cos(rad), sin = Math.sin(rad);
+                    let y1 = y * cos - z * sin;
+                    let z1 = y * sin + z * cos;
+                    let x1 = x;
+
+                    // Rotate around Y axis
+                    rad = cubeRotationY;
+                    cos = Math.cos(rad); sin = Math.sin(rad);
+                    let x2 = x1 * cos + z1 * sin;
+                    let z2 = -x1 * sin + z1 * cos;
+                    let y2 = y1;
+
+                    // Rotate around Z axis
+                    rad = cubeRotationZ;
+                    cos = Math.cos(rad); sin = Math.sin(rad);
+                    let x3 = x2 * cos - y2 * sin;
+                    let y3 = x2 * sin + y2 * cos;
+                    let z3 = z2;
+
+                    // Project to 2D screen space with perspective depth
+                    const distance = 4.5;
+                    const perspective = distance / (distance + z3);
+                    
+                    const screenX = width / 2 + x3 * baseSize * perspective + mouseX * 0.1;
+                    const screenY = height / 2 + y3 * baseSize * perspective + mouseY * 0.1;
+
+                    transformedVertices.push({ x: screenX, y: screenY, z: z3 });
+                }
+
+                ctx.save();
+                ctx.lineWidth = 2.5;
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = 'rgba(165, 180, 252, 0.8)';
+
+                // Draw cube edges with gradient neon styling
+                for (let i = 0; i < cubeEdges.length; i++) {
+                    const [startIdx, endIdx] = cubeEdges[i];
+                    const v1 = transformedVertices[startIdx];
+                    const v2 = transformedVertices[endIdx];
+
+                    const avgZ = (v1.z + v2.z) / 2;
+                    const alpha = Math.max(0.2, Math.min(1, (avgZ + 2) / 3));
+
+                    ctx.strokeStyle = `rgba(129, 140, 248, ${alpha})`;
+                    ctx.beginPath();
+                    ctx.moveTo(v1.x, v1.y);
+                    ctx.lineTo(v2.x, v2.y);
+                    ctx.stroke();
+                }
+
+                // Draw vertex dots
+                for (let i = 0; i < transformedVertices.length; i++) {
+                    const v = transformedVertices[i];
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath();
+                    ctx.arc(v.x, v.y, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+
+            function resizeCanvas() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                canvas.width = width * window.devicePixelRatio;
+                canvas.height = height * window.devicePixelRatio;
+                ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            }
+
+            function initStars() {
+                stars = [];
+                for (let i = 0; i < starCount; i++) {
+                    stars.push(new Star());
+                }
+            }
+
+            window.addEventListener('resize', () => {
+                resizeCanvas();
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                targetMouseX = (e.clientX - width / 2) * 0.3;
+                targetMouseY = (e.clientY - height / 2) * 0.3;
+
+                if (isMouseDown) {
+                    cameraOffsetX += (e.clientX - lastMouseX) * 0.8;
+                    cameraOffsetY += (e.clientY - lastMouseY) * 0.8;
+                }
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+            });
+
+            window.addEventListener('mousedown', (e) => {
+                isMouseDown = true;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+            });
+
+            window.addEventListener('mouseup', () => {
+                isMouseDown = false;
+            });
+
+            window.addEventListener('touchmove', (e) => {
+                if (e.touches.length > 0) {
+                    const touch = e.touches[0];
+                    targetMouseX = (touch.clientX - width / 2) * 0.3;
+                    targetMouseY = (touch.clientY - height / 2) * 0.3;
+                }
+            }, { passive: true });
+
+            function animate(currentTime) {
+                mouseX += (targetMouseX - mouseX) * 0.05;
+                mouseY += (targetMouseY - mouseY) * 0.05;
+
+                if (!isMouseDown) {
+                    cameraOffsetX += (0 - cameraOffsetX) * 0.02;
+                    cameraOffsetY += (0 - cameraOffsetY) * 0.02;
+                }
+
+                ctx.fillStyle = hyperdrive ? 'rgba(5, 5, 10, 0.25)' : 'rgba(5, 5, 10, 0.4)';
+                ctx.fillRect(0, 0, width, height);
+
+                // Update and draw starfield background
+                for (let i = 0; i < stars.length; i++) {
+                    const star = stars[i];
+                    star.update(1.0);
+                    star.draw();
+                }
+
+                // Draw rotating and squashing vector cube in the foreground
+                drawCube();
+
+                requestAnimationFrame(animate);
+            }
+
+            resizeCanvas();
+            initStars();
+            requestAnimationFrame(animate);
+        };
+    </script>
+</body>
+</html>
